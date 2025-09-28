@@ -1,37 +1,46 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/bash
 
-TARGET="${1:-marble}"
-SRC_ROOT="${SRC_ROOT:-$(pwd)}"
-TC_DIR="${HOME}/toolchains/llvm-21"
-JOBS="${JOBS:-2}"
+echo -e "\n[INFO]: BUILD STARTED..!\n"
 
-export PATH="${TC_DIR}/bin:${PATH}"
+# init submodules
+git submodule init && git submodule update
+
+export KERNEL_ROOT="$(pwd)"
 export ARCH=arm64
-export SUBARCH=arm64
 export KBUILD_BUILD_USER="github-actions"
-export KBUILD_BUILD_HOST="github"
+
+# toolchain clang-r563880b (sudah di-download via workflow)
+export CLANG_DIR="${HOME}/toolchains/clang-r563880b"
+export PATH="${CLANG_DIR}/bin:${PATH}"
+
+# cross compile
 export CROSS_COMPILE=aarch64-linux-gnu-
 export CROSS_COMPILE_ARM32=arm-linux-gnueabi-
 export CC=clang
 export LD=ld.lld
 
-echo "[INFO] TARGET=$TARGET"
-echo "[INFO] SRC_ROOT=$SRC_ROOT"
-echo "[INFO] TC_DIR=$TC_DIR"
-echo "[INFO] JOBS=$JOBS"
+# Create necessary directories
+mkdir -p "${KERNEL_ROOT}/out" "${KERNEL_ROOT}/build"
 
-cd "$SRC_ROOT"
+build_kernel(){
+    # defconfig
+    make -C ${KERNEL_ROOT} O=${KERNEL_ROOT}/out \
+        ARCH=arm64 LLVM=1 LLVM_IAS=1 \
+        CROSS_COMPILE=${CROSS_COMPILE} \
+        CROSS_COMPILE_ARM32=${CROSS_COMPILE_ARM32} \
+        CC=${CC} -j$(nproc) gki_defconfig
 
-mkdir -p out build
+    # build Image
+    make -C ${KERNEL_ROOT} O=${KERNEL_ROOT}/out \
+        ARCH=arm64 LLVM=1 LLVM_IAS=1 \
+        CROSS_COMPILE=${CROSS_COMPILE} \
+        CROSS_COMPILE_ARM32=${CROSS_COMPILE_ARM32} \
+        CC=${CC} -j$(nproc) Image || exit 1
 
-make O=out ARCH=arm64 gki_defconfig
-make -j"$JOBS" O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 Image
+    # copy hasil
+    cp "${KERNEL_ROOT}/out/arch/arm64/boot/Image" "${KERNEL_ROOT}/build"
 
-if [ -f out/arch/arm64/boot/Image ]; then
-  cp out/arch/arm64/boot/Image build/
-  echo "[INFO] Build finished, Image in build/"
-else
-  echo "[ERROR] Kernel Image not found"
-  exit 1
-fi
+    echo -e "\n[INFO]: BUILD FINISHED..!\n"
+}
+
+build_kernel
