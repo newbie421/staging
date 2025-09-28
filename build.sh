@@ -1,46 +1,35 @@
 #!/bin/bash
+set -euo pipefail
 
 echo -e "\n[INFO]: BUILD STARTED..!\n"
 
-# init submodules
-git submodule init && git submodule update
+KERNEL_ROOT="$(pwd)"
+OUT_DIR="${KERNEL_ROOT}/out"
+BUILD_DIR="${KERNEL_ROOT}/build"
 
-export KERNEL_ROOT="$(pwd)"
+mkdir -p "$OUT_DIR" "$BUILD_DIR"
+
 export ARCH=arm64
 export KBUILD_BUILD_USER="github-actions"
-
-# toolchain clang-r563880b (sudah di-download via workflow)
-export CLANG_DIR="${HOME}/toolchains/clang-r563880b"
-export PATH="${CLANG_DIR}/bin:${PATH}"
-
-# cross compile
+export PATH="$HOME/toolchains/llvm-21/bin:$PATH"
 export CROSS_COMPILE=aarch64-linux-gnu-
 export CROSS_COMPILE_ARM32=arm-linux-gnueabi-
 export CC=clang
 export LD=ld.lld
 
-# Create necessary directories
-mkdir -p "${KERNEL_ROOT}/out" "${KERNEL_ROOT}/build"
+# Defconfig
+echo -e "\n[INFO] Running defconfig...\n"
+make O="$OUT_DIR" ARCH=arm64 gki_defconfig
 
-build_kernel(){
-    # defconfig
-    make -C ${KERNEL_ROOT} O=${KERNEL_ROOT}/out \
-        ARCH=arm64 LLVM=1 LLVM_IAS=1 \
-        CROSS_COMPILE=${CROSS_COMPILE} \
-        CROSS_COMPILE_ARM32=${CROSS_COMPILE_ARM32} \
-        CC=${CC} -j$(nproc) gki_defconfig
+# Build kernel
+echo -e "\n[INFO] Building kernel...\n"
+make -j"$(nproc)" O="$OUT_DIR" ARCH=arm64 LLVM=1 LLVM_IAS=1 Image 2>&1 | tee build.log
 
-    # build Image
-    make -C ${KERNEL_ROOT} O=${KERNEL_ROOT}/out \
-        ARCH=arm64 LLVM=1 LLVM_IAS=1 \
-        CROSS_COMPILE=${CROSS_COMPILE} \
-        CROSS_COMPILE_ARM32=${CROSS_COMPILE_ARM32} \
-        CC=${CC} -j$(nproc) Image || exit 1
-
-    # copy hasil
-    cp "${KERNEL_ROOT}/out/arch/arm64/boot/Image" "${KERNEL_ROOT}/build"
-
-    echo -e "\n[INFO]: BUILD FINISHED..!\n"
-}
-
-build_kernel
+# Copy output
+if [ -f "$OUT_DIR/arch/arm64/boot/Image" ]; then
+    cp "$OUT_DIR/arch/arm64/boot/Image" "$BUILD_DIR/"
+    echo -e "\n[INFO]: BUILD FINISHED! Kernel Image available.\n"
+else
+    echo -e "\n[ERROR]: Kernel Image not found. Check build.log\n"
+    exit 1
+fi
