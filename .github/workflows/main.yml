@@ -1,0 +1,88 @@
+name: build
+
+on:
+  workflow_dispatch:
+    inputs:
+      device:
+        description: "Target device (ex: marble, cupid)"
+        required: true
+        default: marble
+      src_root:
+        description: "Optional: path inside repo to AOSPA root (leave empty to use repo root)"
+        required: false
+        default: ""
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up swap (optional, helps LTO)
+        uses: pierotofy/set-swap-space@master
+        with:
+          swap-size-gb: 8
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            git wget curl make gcc g++ bc bison flex \
+            libssl-dev libncurses5-dev libncursesw5-dev \
+            python3 python3-pip unzip device-tree-compiler \
+            gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi \
+            u-boot-tools
+
+          # optional python package used by some scripts (mkdtboimg)
+          python3 -m pip install --upgrade pip
+          python3 -m pip install mkdtboimg || true
+
+      - name: Download LLVM 21.1.2 (Linux x86_64)
+        run: |
+          mkdir -p $HOME/toolchains
+          cd $HOME/toolchains
+          wget -q https://github.com/llvm/llvm-project/releases/download/llvmorg-21.1.2/LLVM-21.1.2-Linux-X64.tar.xz -O llvm-21.tar.xz
+          mkdir -p llvm-21
+          tar -xf llvm-21.tar.xz -C llvm-21 --strip-components=1
+          echo "PATH=$HOME/toolchains/llvm-21/bin:$PATH" >> $GITHUB_ENV
+          echo "CC=clang" >> $GITHUB_ENV
+          echo "LD=ld.lld" >> $GITHUB_ENV
+          echo "AR=llvm-ar" >> $GITHUB_ENV
+          echo "NM=llvm-nm" >> $GITHUB_ENV
+          echo "OBJCOPY=llvm-objcopy" >> $GITHUB_ENV
+          echo "OBJDUMP=llvm-objdump" >> $GITHUB_ENV
+          echo "READELF=llvm-readelf" >> $GITHUB_ENV
+          echo "STRIP=llvm-strip" >> $GITHUB_ENV
+
+      - name: Run build script
+        env:
+          # jika input src_root kosong akan di-handle di build.sh (pakai repo root)
+          SRC_ROOT: ${{ github.event.inputs.src_root || '' }}
+          TARGET: ${{ github.event.inputs.device }}
+          JOBS: 2                       # default parallel job count (turunkan/naikkan sesuai memory)
+        run: |
+          chmod +x build.sh
+          ./build.sh "${{ github.event.inputs.device }}"
+
+      - name: Compress kernel image (if exist)
+        if: always()
+        run: |
+          # artifact path depends on your repo layout; adjust if needed
+          IMAGE_PATH="device/xiaomi/${{ github.event.inputs.device }}-kernel/Image"
+          if [ -f "${IMAGE_PATH}" ]; then
+            gzip -9 -c "${IMAGE_PATH}" > "device/xiaomi/${{ github.event.inputs.device }}-kernel/Image.gz"
+          fi
+
+      - name: Upload Kernel artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-${{ github.event.inputs.device }}
+          path: |
+            device/xiaomi/${{ github.event.inputs.device }}-kernel/Image
+            device/xiaomi/${{ github.event.inputs.device }}-kernel/Image.gz
+            device/xiaomi/${{ github.event.inputs.device }}-kernel/dtbs/*.dtb
+            device/xiaomi/${{ github.event.inputs.device }}-kernel/dtbs/dtbo.img
+            out/modules/lib/modules/**/*
